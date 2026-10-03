@@ -1,4 +1,4 @@
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:latlong2/latlong.dart';
 
 /// Model representing a predefined favorite location
 class FavoriteLocation {
@@ -16,6 +16,6 @@ class FavoriteLocation {
     this.description,
   });
 
-  /// Helper to get LatLng for Google Maps
+  /// Helper to get LatLng compatible with flutter_map / latlong2
   LatLng get latLng => LatLng(latitude, longitude);
 }

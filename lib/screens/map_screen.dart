@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../data/favorite_locations_data.dart';
 import '../models/favorite_location.dart';
@@ -8,7 +10,7 @@ import '../widgets/favorite_location_details_sheet.dart';
 import '../widgets/favorite_locations_list_sheet.dart';
 import '../widgets/map_control_buttons.dart';
 
-/// Main Screen displaying Google Map with Favorite Locations & GPS Location features
+/// Main Screen displaying OpenStreetMap with Favorite Locations & GPS features
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -17,15 +19,13 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
 
-  // Initial Camera position centered around Khulna University
-  static const CameraPosition _initialCameraPosition = CameraPosition(
-    target: LatLng(22.8026, 89.3709),
-    zoom: 13.0,
-  );
+  // Initial center – Khulna University
+  static const LatLng _initialCenter = LatLng(22.8026, 89.3709);
+  static const double _initialZoom = 13.0;
 
-  final Set<Marker> _markers = {};
+  final List<Marker> _markers = [];
   bool _isLoadingLocation = false;
 
   @override
@@ -34,26 +34,31 @@ class _MapScreenState extends State<MapScreen> {
     _initializeFavoriteMarkers();
   }
 
-  /// Initializes the markers for all favorite locations
+  /// Builds markers for all predefined favorite locations
   void _initializeFavoriteMarkers() {
     for (final location in favoriteLocationsList) {
-      _markers.add(
-        Marker(
-          markerId: MarkerId('fav_${location.id}'),
-          position: location.latLng,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-          infoWindow: InfoWindow(
-            title: location.name,
-            snippet: 'ID: ${location.id} (Tap to view details)',
-            onTap: () => _onFavoriteMarkerTapped(location),
-          ),
-          onTap: () => _onFavoriteMarkerTapped(location),
-        ),
-      );
+      _markers.add(_buildFavoriteMarker(location));
     }
   }
 
-  /// Called when a favorite marker is tapped
+  /// Creates a styled marker widget for a favorite location
+  Marker _buildFavoriteMarker(FavoriteLocation location) {
+    return Marker(
+      point: location.latLng,
+      width: 50,
+      height: 50,
+      child: GestureDetector(
+        onTap: () => _onFavoriteMarkerTapped(location),
+        child: const Icon(
+          Icons.location_pin,
+          color: Colors.blueAccent,
+          size: 45,
+        ),
+      ),
+    );
+  }
+
+  /// Shows the details bottom sheet for a tapped favorite location
   void _onFavoriteMarkerTapped(FavoriteLocation location) {
     FavoriteLocationDetailsSheet.show(
       context,
@@ -62,46 +67,53 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  /// Moves the map camera smoothly to a given LatLng
-  Future<void> _animateCameraTo(LatLng target, {double zoom = 15.0}) async {
-    if (_mapController != null) {
-      await _mapController!.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(target: target, zoom: zoom),
-        ),
-      );
-    }
+  /// Smoothly moves the map to [target] at the given [zoom] level
+  void _animateCameraTo(LatLng target, {double zoom = 15.0}) {
+    _mapController.move(target, zoom);
   }
 
-  /// Fetches user's current GPS location and animates camera to it
+  /// Fetches current GPS location and moves the map camera
   Future<void> _handleGetCurrentLocation() async {
-    setState(() {
-      _isLoadingLocation = true;
-    });
+    setState(() => _isLoadingLocation = true);
 
     try {
-      // 1. Get current position via LocationService
-      final position = await LocationService.getCurrentLocation();
-      final userLatLng = LatLng(position.latitude, position.longitude);
+      final Position position = await LocationService.getCurrentLocation();
+      final LatLng userLatLng = LatLng(position.latitude, position.longitude);
 
+      // Add / update the "Your Location" marker
       setState(() {
-        // Add or update User Location Marker
-        _markers.removeWhere((m) => m.markerId.value == 'user_current_location');
+        _markers.removeWhere(
+          (m) =>
+              m.point.latitude == userLatLng.latitude &&
+              m.point.longitude == userLatLng.longitude,
+        );
         _markers.add(
           Marker(
-            markerId: const MarkerId('user_current_location'),
-            position: userLatLng,
-            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-            infoWindow: const InfoWindow(
-              title: 'Your Location',
-              snippet: 'You are here',
+            point: userLatLng,
+            width: 50,
+            height: 50,
+            child: GestureDetector(
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Your Location: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}',
+                    ),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+              child: const Icon(
+                Icons.my_location,
+                color: Colors.redAccent,
+                size: 40,
+              ),
             ),
           ),
         );
       });
 
-      // 2. Move camera to user's location
-      await _animateCameraTo(userLatLng, zoom: 16.0);
+      _animateCameraTo(userLatLng, zoom: 16.0);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -125,40 +137,22 @@ class _MapScreenState extends State<MapScreen> {
         );
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoadingLocation = false;
-        });
-      }
+      if (mounted) setState(() => _isLoadingLocation = false);
     }
   }
 
-  /// Opens the modal list displaying all favorite locations
+  /// Shows the favorite locations list bottom sheet
   void _openFavoriteLocationsList() {
     FavoriteLocationsListSheet.show(
       context,
       locations: favoriteLocationsList,
-      onSelectLocation: (selectedLocation) {
-        _animateCameraTo(selectedLocation.latLng, zoom: 16.0);
-        _onFavoriteMarkerTapped(selectedLocation);
+      onSelectLocation: (selected) {
+        _animateCameraTo(selected.latLng, zoom: 16.0);
+        Future.delayed(const Duration(milliseconds: 350), () {
+          if (mounted) _onFavoriteMarkerTapped(selected);
+        });
       },
     );
-  }
-
-  /// Zooms in by 1 step
-  void _zoomIn() {
-    _mapController?.animateCamera(CameraUpdate.zoomIn());
-  }
-
-  /// Zooms out by 1 step
-  void _zoomOut() {
-    _mapController?.animateCamera(CameraUpdate.zoomOut());
-  }
-
-  @override
-  void dispose() {
-    _mapController?.dispose();
-    super.dispose();
   }
 
   @override
@@ -171,19 +165,27 @@ class _MapScreenState extends State<MapScreen> {
       ),
       body: Stack(
         children: [
-          // 1. Google Map Widget
-          GoogleMap(
-            initialCameraPosition: _initialCameraPosition,
-            markers: _markers,
-            myLocationEnabled: true,
-            myLocationButtonEnabled: false, // Using our custom button
-            zoomControlsEnabled: false, // Using our custom zoom buttons
-            onMapCreated: (controller) {
-              _mapController = controller;
-            },
+          // ── OpenStreetMap ──────────────────────────────────────────────
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _initialCenter,
+              initialZoom: _initialZoom,
+            ),
+            children: [
+              // Free OpenStreetMap tile layer — no key required
+              TileLayer(
+                urlTemplate:
+                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName:
+                    'com.example.google_maps_and_location',
+              ),
+              // All markers (favorites + user location)
+              MarkerLayer(markers: _markers),
+            ],
           ),
 
-          // 2. Top Banner / Favorite Locations Button
+          // ── Favorite Locations button (top center) ────────────────────
           Positioned(
             top: 16,
             left: 16,
@@ -191,16 +193,22 @@ class _MapScreenState extends State<MapScreen> {
             child: Center(
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.surface,
-                  foregroundColor: Theme.of(context).colorScheme.primary,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.surface,
+                  foregroundColor:
+                      Theme.of(context).colorScheme.primary,
                   elevation: 6,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(30),
                   ),
                 ),
                 onPressed: _openFavoriteLocationsList,
-                icon: const Text('📍', style: TextStyle(fontSize: 18)),
+                icon:
+                    const Text('📍', style: TextStyle(fontSize: 18)),
                 label: const Text(
                   'Favorite Locations',
                   style: TextStyle(
@@ -212,17 +220,44 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
 
-          // 3. Right-side Custom Control Buttons (Zoom In/Out + My Location)
+          // ── Zoom + My Location controls (bottom right) ────────────────
           Positioned(
             bottom: 24,
             right: 16,
             child: MapControlButtons(
-              onZoomIn: _zoomIn,
-              onZoomOut: _zoomOut,
+              onZoomIn: () => _mapController.move(
+                _mapController.camera.center,
+                _mapController.camera.zoom + 1,
+              ),
+              onZoomOut: () => _mapController.move(
+                _mapController.camera.center,
+                _mapController.camera.zoom - 1,
+              ),
               onMyLocation: _handleGetCurrentLocation,
               isLoadingLocation: _isLoadingLocation,
             ),
           ),
+
+          // ── Loading overlay ───────────────────────────────────────────
+          if (_isLoadingLocation)
+            Container(
+              color: Colors.black26,
+              child: const Center(
+                child: Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 12),
+                        Text('Fetching GPS location…'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
